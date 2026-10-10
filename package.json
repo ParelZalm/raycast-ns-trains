@@ -1,0 +1,66 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "ns-trains",
+  "title": "NS Trains",
+  "description": "Next NS trains between two stations (default Tilburg → Eindhoven Centraal), with delays, platforms, crowding and disruptions.",
+  "icon": "extension-icon.png",
+  "author": "marijn_panhuijsen",
+  "license": "MIT",
+  "private": true,
+  "commands": [
+    {
+      "name": "next-trains",
+      "title": "Next Trains",
+      "subtitle": "NS",
+      "description": "Show the upcoming trips on your route. ⌘S swaps the direction, ⌘⇧F / ⌘⇧T pick another departure or destination station.",
+      "mode": "view"
+    },
+    {
+      "name": "next-train-menu-bar",
+      "title": "Next Train in Menu Bar",
+      "subtitle": "NS",
+      "description": "Show the next departure (with delay and platform) on the route chosen in Next Trains.",
+      "mode": "menu-bar",
+      "interval": "2m"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "apiKey",
+      "title": "NS API Key",
+      "description": "Primary key of your Ns-App subscription on apiportal.ns.nl.",
+      "type": "password",
+      "required": true
+    },
+    {
+      "name": "fromStation",
+      "title": "From Station",
+      "description": "NS station code, e.g. TB (Tilburg). Default route; Next Trains can switch to another one.",
+      "type": "textfield",
+      "default": "TB",
+      "required": false
+    },
+    {
+      "name": "toStation",
+      "title": "To Station",
+      "description": "NS station code, e.g. EHV (Eindhoven Centraal). Default route; Next Trains can switch to another one.",
+      "type": "textfield",
+      "default": "EHV",
+      "required": false
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.102.4",
+    "@raycast/utils": "^2.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.8.0"
+  },
+  "scripts": {
+    "dev": "ray develop",
+    "build": "ray build -e dist",
+    "typecheck": "tsc --noEmit"
+  }
+}
