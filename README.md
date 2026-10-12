@@ -36,6 +36,12 @@
   <img src="metadata/menu-bar.png" width="320" alt="Next train in the macOS menu bar" />
 </p>
 
+## Quick tour
+
+<p align="center">
+  <img src="media/onboarding.gif" width="760" alt="Getting an API key, installing, and using Next Trains, trip details, swapping direction and the menu bar" />
+</p>
+
 ## Get an NS API key
 
 The extension uses NS's official **Reisinformatie API**, which needs a free key.
