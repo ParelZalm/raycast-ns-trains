@@ -1,4 +1,4 @@
-// NS Reisinformatie API (v3 trips) mapped to the few fields the commands show.
+// NS Reisinformatie API (v3 trips) and Virtual Train API mapped to the few fields the commands show.
 import { getPreferenceValues } from "@raycast/api"
 import { Cached, RateLimitError, backOff, readCache, takeRequestSlot, writeCache } from "./limiter"
 
@@ -18,8 +18,18 @@ export interface StopTime {
   trackChanged: boolean
 }
 
+// The train's composition, from the Virtual Train API.
+export interface TrainStock {
+  type: string
+  carriages: number
+  lengthInMeters?: number
+  shortened: boolean
+  units: { type: string; carriages: number }[]
+}
+
 export interface TrainLeg {
   product: string
+  trainNumber?: string
   category: string
   direction?: string
   departure: StopTime
@@ -27,6 +37,9 @@ export interface TrainLeg {
   cancelled: boolean
   crowd: Crowd
   intermediateStops: string[]
+  // NS's own "shorter train than usual" flag from the trips API.
+  shorterStock: boolean
+  stock?: TrainStock
 }
 
 export interface TrainTrip {
@@ -55,6 +68,8 @@ export interface TripsResult {
 export interface Station {
   code: string
   name: string
+  // NS's abbreviated name, e.g. "Eindhoven C." for Eindhoven Centraal.
+  shortName: string
   country: string
   keywords: string[]
 }
@@ -81,6 +96,7 @@ interface Preferences {
 
 interface NsEndpoint {
   name?: string
+  stationCode?: string
   plannedDateTime?: string
   actualDateTime?: string
   plannedTrack?: string
@@ -104,8 +120,18 @@ interface NsLeg {
   destination: NsEndpoint
   product?: { displayName?: string; shortCategoryName?: string; longCategoryName?: string; number?: string }
   crowdForecast?: Crowd
+  shorterStock?: boolean
   stops?: NsStop[]
   messages?: NsMessage[]
+}
+
+interface NsTrain {
+  ritnummer: number
+  station?: string
+  ingekort?: boolean
+  lengte?: number
+  lengteInMeters?: number
+  materieeldelen?: { type?: string; bakken?: unknown[] }[]
 }
 
 interface NsStation {
@@ -186,7 +212,8 @@ export async function fetchTrips(from: string, to: string, force = false): Promi
         fromStation: from,
         toStation: to,
       })
-      return trips.filter((trip) => trip.legs.length > 0).map(toTrip)
+      const planned = trips.filter((trip) => trip.legs.length > 0)
+      return withStock(planned.map(toTrip), stockStations(planned))
     } catch (error) {
       if (error instanceof NsApiError && error.status === 400) {
         throw new NsApiError(`NS couldn't plan ${from} → ${to}; check the station codes`, 400)
@@ -198,7 +225,8 @@ export async function fetchTrips(from: string, to: string, force = false): Promi
 }
 
 export async function fetchStations(): Promise<Station[]> {
-  const result = await cachedRequest("stations", STATIONS_FRESH_MS, async () => {
+  // v2 added shortName; the old cache entry lacks it.
+  const result = await cachedRequest("stations:v2", STATIONS_FRESH_MS, async () => {
     const { payload } = await nsRequest<{ payload: NsStation[] }>("/nsapp-stations/v3")
     return payload.map(toStation).sort((a, b) => a.name.localeCompare(b.name, "nl"))
   })
@@ -212,11 +240,57 @@ function upcoming(trips: TrainTrip[]): TrainTrip[] {
   return remaining.length > 0 ? remaining : trips
 }
 
+// Which station to ask each train's composition for: where the route boards it, since trains can split or join on the way.
+function stockStations(trips: NsTrip[]): Map<string, string> {
+  const stations = new Map<string, string>()
+  for (const leg of trips.flatMap((trip) => trip.legs)) {
+    const number = leg.product?.number
+    if (number && leg.origin.stationCode && !stations.has(number)) stations.set(number, leg.origin.stationCode)
+  }
+  return stations
+}
+
+// One request covers every train on the route. Failing it only costs the size info, never the trips.
+async function withStock(trips: TrainTrip[], stations: Map<string, string>): Promise<TrainTrip[]> {
+  if (stations.size === 0) return trips
+  let trains: NsTrain[]
+  try {
+    trains = await nsRequest<NsTrain[]>("/virtual-train-api/api/v1/trein", {
+      ids: [...stations.keys()].join(","),
+      stations: [...stations.values()].join(","),
+    })
+  } catch {
+    return trips
+  }
+  const stock = new Map(trains.map((train) => [String(train.ritnummer), toStock(train)]))
+  return trips.map((trip) => ({
+    ...trip,
+    legs: trip.legs.map((leg) => {
+      const legStock = leg.trainNumber ? stock.get(leg.trainNumber) : undefined
+      return legStock ? { ...leg, stock: { ...legStock, shortened: legStock.shortened || leg.shorterStock } } : leg
+    }),
+  }))
+}
+
+function toStock(train: NsTrain): TrainStock | undefined {
+  const parts = train.materieeldelen ?? []
+  const carriages = train.lengte ?? parts.reduce((sum, part) => sum + (part.bakken?.length ?? 0), 0)
+  if (carriages === 0) return undefined
+  return {
+    type: [...new Set(parts.map((part) => part.type).filter(Boolean))].join(" + "),
+    carriages,
+    lengthInMeters: train.lengteInMeters,
+    shortened: Boolean(train.ingekort),
+    units: parts.map((part) => ({ type: part.type ?? "", carriages: part.bakken?.length ?? 0 })),
+  }
+}
+
 function toStation(station: NsStation): Station {
   const { long, medium, short, synonyms = [] } = station.names
   return {
     code: station.id.code,
     name: long,
+    shortName: medium ?? long,
     country: station.country,
     keywords: [...new Set([station.id.code, medium, short, ...synonyms].filter((name): name is string => Boolean(name)))],
   }
@@ -246,12 +320,14 @@ function toLeg(leg: NsLeg): TrainLeg {
   const product = leg.product
   return {
     product: [product?.longCategoryName ?? product?.displayName, product?.number].filter(Boolean).join(" ") || "Train",
+    trainNumber: product?.number,
     category: product?.shortCategoryName ?? product?.displayName ?? "",
     direction: leg.direction,
     departure: toStopTime(leg.origin),
     arrival: toStopTime(leg.destination),
     cancelled: leg.cancelled,
     crowd: leg.crowdForecast ?? "UNKNOWN",
+    shorterStock: Boolean(leg.shorterStock),
     // stops includes the leg's own origin and destination.
     intermediateStops: (leg.stops ?? [])
       .slice(1, -1)

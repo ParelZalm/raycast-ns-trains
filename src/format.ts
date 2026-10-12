@@ -1,5 +1,5 @@
 import { Color } from "@raycast/api"
-import { Crowd, StopTime, TrainTrip } from "./api/ns"
+import { Crowd, StopTime, TrainStock, TrainTrip } from "./api/ns"
 
 const timeFormat = new Intl.DateTimeFormat("nl-NL", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Amsterdam" })
 
@@ -24,6 +24,11 @@ export function formatTrack(stop: StopTime): string | undefined {
 export function formatDuration(minutes: number): string {
   if (minutes < 60) return `${minutes} min`
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`
+}
+
+export function formatStock(stock: TrainStock): string {
+  const parts = [stock.type, `${stock.carriages} carriages`, stock.lengthInMeters && `${stock.lengthInMeters} m`]
+  return parts.filter(Boolean).join(" · ") + (stock.shortened ? " (shorter than usual)" : "")
 }
 
 export function formatPrice(cents: number): string {

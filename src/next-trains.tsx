@@ -1,13 +1,14 @@
 import { Action, ActionPanel, Color, Icon, List, Toast, showToast } from "@raycast/api"
 import { ComponentProps, useEffect, useState } from "react"
 import { useCachedPromise } from "@raycast/utils"
-import { TrainLeg, TrainTrip, fetchTrips } from "./api/ns"
+import { StopTime, TrainLeg, TrainTrip, fetchStations, fetchTrips } from "./api/ns"
 import {
   crowdColor,
   crowdLabel,
   formatDelay,
   formatDuration,
   formatPrice,
+  formatStock,
   formatStopTime,
   formatTime,
   formatTrack,
@@ -15,7 +16,9 @@ import {
   statusLabel,
 } from "./format"
 import { useRoute } from "./route"
+import { useSplitFlap } from "./split-flap"
 import { StationPicker } from "./station-picker"
+import { trainImageMarkdown } from "./train-image"
 
 export default function Command() {
   const { route, isLoading: routeLoading, isDefault, setRoute, resetRoute } = useRoute()
@@ -24,6 +27,7 @@ export default function Command() {
     execute: !routeLoading,
   })
   const trips = data?.trips ?? []
+  const flap = useSplitFlap(trips.map((trip) => ({ id: trip.id, text: tripTimes(trip) })))
 
   useEffect(() => {
     if (!data?.staleReason) return
@@ -32,6 +36,10 @@ export default function Command() {
 
   const first = trips[0]
   const routeTitle = first ? `${first.departure.station} → ${first.arrival.station}` : `${route.from} → ${route.to}`
+  const { data: stations } = useCachedPromise(fetchStations)
+  const shortName = (code: string) => stations?.find((station) => station.code === code)?.shortName ?? code
+  // The detail pane leaves the section header too narrow for full names next to "Updated"; NS's short names fit.
+  const sectionTitle = showingDetail && trips.length > 0 ? `${shortName(route.from)} → ${shortName(route.to)}` : routeTitle
   const refresh = () => mutate(fetchTrips(route.from, route.to, true), { shouldRevalidateAfter: false })
 
   // Picking the station at the other end of the route swaps the direction instead of planning X → X.
@@ -97,12 +105,13 @@ export default function Command() {
           }
         />
       ) : (
-        <List.Section title={routeTitle} subtitle={data ? `Updated ${formatTime(data.fetchedAt)}` : undefined}>
+        <List.Section title={sectionTitle} subtitle={data ? `Updated ${formatTime(data.fetchedAt)}` : undefined}>
           {trips.map((trip) => (
             <TripItem
               key={trip.id}
               trip={trip}
               showingDetail={showingDetail}
+              title={flap(trip.id, tripTimes(trip))}
               actions={
                 <ActionPanel>
                   <ActionPanel.Section>
@@ -136,10 +145,21 @@ export default function Command() {
   )
 }
 
-function TripItem({ trip, showingDetail, actions }: { trip: TrainTrip; showingDetail: boolean; actions: ComponentProps<typeof List.Item>["actions"] }) {
+function TripItem({
+  trip,
+  showingDetail,
+  title,
+  actions,
+}: {
+  trip: TrainTrip
+  showingDetail: boolean
+  title: string
+  actions: ComponentProps<typeof List.Item>["actions"]
+}) {
   const status = statusLabel(trip)
   const delay = formatDelay(trip.departure)
   const track = trip.departure.track
+  const stock = trip.legs[0].stock
   const categories = [...new Set(trip.legs.map((leg) => leg.category).filter(Boolean))].join(" + ")
   const transfers = trip.transfers === 0 ? "direct" : `${trip.transfers} transfer${trip.transfers > 1 ? "s" : ""}`
 
@@ -156,6 +176,14 @@ function TripItem({ trip, showingDetail, actions }: { trip: TrainTrip; showingDe
               },
             ]
           : []),
+        ...(stock
+          ? [
+              {
+                tag: { value: `${stock.carriages} cars`, color: stock.shortened ? Color.Orange : Color.SecondaryText },
+                tooltip: formatStock(stock),
+              },
+            ]
+          : []),
         { icon: { source: Icon.TwoPeople, tintColor: crowdColor[trip.crowd] }, tooltip: `Crowding: ${crowdLabel[trip.crowd]}` },
         { text: `in ${minutesUntil(trip.departure.actual)} min` },
       ]
@@ -163,7 +191,7 @@ function TripItem({ trip, showingDetail, actions }: { trip: TrainTrip; showingDe
   return (
     <List.Item
       icon={{ source: Icon.Train, tintColor: trip.cancelled ? Color.Red : delay ? Color.Orange : Color.Green }}
-      title={`${formatTime(trip.departure.actual)} → ${formatTime(trip.arrival.actual)}`}
+      title={title}
       subtitle={`${categories} · ${formatDuration(trip.durationMinutes)} · ${transfers}`}
       accessories={accessories}
       detail={<TripDetail trip={trip} />}
@@ -172,31 +200,35 @@ function TripItem({ trip, showingDetail, actions }: { trip: TrainTrip; showingDe
   )
 }
 
+// Raycast gives the metadata only the bottom of the pane, so it stays short enough not to scroll;
+// times and platforms are already in the legs above it.
 function TripDetail({ trip }: { trip: TrainTrip }) {
-  const departureTrack = formatTrack(trip.departure)
-  const arrivalTrack = formatTrack(trip.arrival)
+  const stock = trip.legs[0].stock
   const markdown = [...trip.messages.map((message) => `> ⚠️ ${message}`), ...trip.legs.map(legMarkdown)].join("\n\n")
+  const transfers = trip.transfers === 0 ? "direct" : `${trip.transfers} transfer${trip.transfers > 1 ? "s" : ""}`
+  const punctuality = trip.punctuality !== undefined ? `${Math.round(trip.punctuality)}% on time` : undefined
 
   return (
     <List.Item.Detail
       markdown={markdown}
       metadata={
         <List.Item.Detail.Metadata>
-          <List.Item.Detail.Metadata.Label title="Departure" text={formatStopTime(trip.departure)} />
-          {departureTrack && <List.Item.Detail.Metadata.Label title="Departure Platform" text={departureTrack} />}
-          <List.Item.Detail.Metadata.Label title="Arrival" text={formatStopTime(trip.arrival)} />
-          {arrivalTrack && <List.Item.Detail.Metadata.Label title="Arrival Platform" text={arrivalTrack} />}
-          <List.Item.Detail.Metadata.Separator />
-          <List.Item.Detail.Metadata.Label title="Duration" text={formatDuration(trip.durationMinutes)} />
-          <List.Item.Detail.Metadata.Label title="Transfers" text={String(trip.transfers)} />
+          {stock && (
+            <List.Item.Detail.Metadata.Label
+              title="Train"
+              text={formatStock(stock)}
+              icon={stock.shortened ? { source: Icon.Warning, tintColor: Color.Orange } : undefined}
+            />
+          )}
+          <List.Item.Detail.Metadata.Label
+            title="Journey"
+            text={[formatDuration(trip.durationMinutes), transfers, punctuality].filter(Boolean).join(" · ")}
+          />
           <List.Item.Detail.Metadata.TagList title="Crowding">
             <List.Item.Detail.Metadata.TagList.Item text={crowdLabel[trip.crowd]} color={crowdColor[trip.crowd]} />
           </List.Item.Detail.Metadata.TagList>
-          {trip.punctuality !== undefined && (
-            <List.Item.Detail.Metadata.Label title="Punctuality" text={`${Math.round(trip.punctuality)}%`} />
-          )}
           {trip.priceInCents !== undefined && (
-            <List.Item.Detail.Metadata.Label title="Fare (2nd class, full)" text={formatPrice(trip.priceInCents)} />
+            <List.Item.Detail.Metadata.Label title="Fare (2nd class)" text={formatPrice(trip.priceInCents)} />
           )}
         </List.Item.Detail.Metadata>
       }
@@ -206,13 +238,20 @@ function TripDetail({ trip }: { trip: TrainTrip }) {
 
 function legMarkdown(leg: TrainLeg): string {
   const heading = `### ${leg.cancelled ? "~~" : ""}${leg.product}${leg.direction ? ` → ${leg.direction}` : ""}${leg.cancelled ? "~~ (cancelled)" : ""}`
-  const lines = [
-    heading,
-    `**${formatStopTime(leg.departure)}** ${leg.departure.station}${leg.departure.track ? ` · spoor ${leg.departure.track}` : ""}`,
-    `**${formatStopTime(leg.arrival)}** ${leg.arrival.station}${leg.arrival.track ? ` · spoor ${leg.arrival.track}` : ""}`,
-  ]
+  const lines = [heading, stopMarkdown(leg.departure), stopMarkdown(leg.arrival)]
   if (leg.intermediateStops.length > 0) lines.push(`Via ${leg.intermediateStops.join(", ")}`)
+  const train = leg.stock && trainImageMarkdown(leg.stock)
+  if (train) lines.push(train)
   return lines.join("\n\n")
+}
+
+function stopMarkdown(stop: StopTime): string {
+  const track = formatTrack(stop)
+  return `**${formatStopTime(stop)}** ${stop.station}${track ? ` · ${track}` : ""}`
+}
+
+function tripTimes(trip: TrainTrip): string {
+  return `${formatTime(trip.departure.actual)} → ${formatTime(trip.arrival.actual)}`
 }
 
 function tripSummary(trip: TrainTrip): string {
