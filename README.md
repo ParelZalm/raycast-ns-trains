@@ -16,11 +16,12 @@
 ## Features
 
 - **Next Trains**: the upcoming trips on your route, each with:
-  - departure → arrival time, with delays included and a `+12`-style tag
+  - departure → arrival time, with delays included and a `+12`-style tag. The times flip into place like an old split-flap departure board, and when a refresh changes one, only the digits that changed flip.
   - the platform (*spoor*), highlighted when it changed
+  - how long the train is, e.g. `6 cars`, in orange when it's shorter than usual
   - how busy the train is expected to be, and how many minutes until it leaves
   - cancellations and disruption notices
-- **Trip details** (`⌘D`): every leg with its train number and direction, the stops in between, punctuality and the fare.
+- **Trip details** (`⌘D`): every leg with its train number and direction and the stops in between, plus punctuality and the fare. Each leg has a small drawing of the train in Sprinter, Intercity or double-decker livery, with one block per carriage and a gap between coupled units, so you can see at a glance whether it's a single or double train.
 - **Next Train in Menu Bar**: the next departure always visible, e.g. `20:09 +3 · 1` (time, delay, platform). Click it for the upcoming trains.
 - **Any route**: swap direction with `⌘S`, or search all 750+ NS stations (by name, code or spelling variant like "Dusseldorf") for a new departure station or destination. The route is remembered and the menu bar follows it.
 - **Gentle on the API**: responses are cached and every command shares one request budget (see [Rate limiting](#rate-limiting)).
@@ -40,7 +41,7 @@
 The extension uses NS's official **Reisinformatie API**, which needs a free key.
 
 1. Go to the [NS API portal](https://apiportal.ns.nl) and sign up (or sign in).
-2. Open **Products** and choose **Ns-App**. It includes the Reisinformatie API (trips) and the Stations API, which the extension needs.
+2. Open **Products** and choose **Ns-App**. It includes the three APIs the extension needs: the Reisinformatie API (trips), the Stations API and the Virtual Train API (train length and composition).
 3. Subscribe to it. Any subscription name works, e.g. `Raycast`.
 4. Open your **Profile**. Under your subscription you'll see a **Primary key** and a **Secondary key**. Click **Show** and copy the **Primary key**: a 32-character hex string like `0123456789abcdef0123456789abcdef`.
 
@@ -84,12 +85,13 @@ Then:
 NS doesn't publish a request limit for the Ns-App product, so the extension stays well under any reasonable one:
 
 - Trips are reused for 60 seconds per route, shared between the list and the menu bar. A manual refresh won't call NS again within 15 seconds.
+- Train lengths for all trips on the route come from a single extra request per refresh, cached with the trips. If that request fails, the trains still show, just without their length.
 - The station list is downloaded once a week.
 - All commands share a budget of 10 requests per minute.
 - If NS answers `429 Too Many Requests`, the extension waits for the `Retry-After` time (60 seconds if NS doesn't send one).
 - While it's throttled or offline, the extension shows the last trains it had and says how old they are, instead of an error.
 
-The menu bar refreshes every 2 minutes, which is about 30 requests an hour while your Mac is awake.
+The menu bar refreshes every 2 minutes, which is about 60 requests an hour while your Mac is awake (trips plus train lengths).
 
 ## Development
 
@@ -101,9 +103,11 @@ npm run build      # ray build
 
 | Path | What's in it |
 | --- | --- |
-| `src/api/ns.ts` | NS API client: trips and stations, mapped to small view models |
+| `src/api/ns.ts` | NS API client: trips, stations and train composition, mapped to small view models |
 | `src/api/limiter.ts` | Shared response cache, request budget and `429` back-off |
 | `src/next-trains.tsx` | The list command and trip details |
+| `src/split-flap.ts` | The split-flap animation for trip times |
+| `src/train-image.ts` | The train drawings in the trip details |
 | `src/next-train-menu-bar.tsx` | The menu bar command |
 | `src/station-picker.tsx` | Station search used to change the route |
 | `src/route.ts` | The remembered route, shared by both commands |
